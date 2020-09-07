@@ -7,7 +7,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MAX 256
+#define QUEUE_MAX_SIZE 256
 
 enum frutas {
   banana,
@@ -22,8 +22,6 @@ struct produto {
   short int qualidade;
 } produto;
 
-#define READ 0
-
 FILE *esteira_lock(char *operacao, char *file_name) {
 
   FILE *file = fopen(file_name, operacao);
@@ -36,7 +34,27 @@ FILE *esteira_lock(char *operacao, char *file_name) {
 
   return file;
 }
+void remove_first_from_queue(FILE *file) {
+  struct produto object2[QUEUE_MAX_SIZE];
+  int i = 0;
+  while (!feof(file)) {
+    fread(&object2[i], sizeof(struct produto), 1, file);
+    // printf("obj2: %d quali:%d %d\n", object2[i].fruta, object2[i].qualidade, i);
+    i++;
 
+    int c = fgetc(file);
+    if (c == EOF) {
+      printf("Hit EOF\n");
+      ungetc(c, file);
+    } else
+      ungetc(c, file);
+  }
+
+  freopen("fila", "w", file);
+  for (int j = 0; j < i; j++) {
+    fwrite(&object2[j], sizeof(struct produto), 1, file);
+  }
+}
 void esteira(char *operacao, struct produto *prod, char *fila) {
   FILE *file = esteira_lock(operacao, fila);
 
@@ -46,41 +64,21 @@ void esteira(char *operacao, struct produto *prod, char *fila) {
     object.fruta = (*prod).fruta;
     object.qualidade = (*prod).qualidade;
 
-    printf("PF: %d Q: %d\n", (*prod).fruta, (*prod).qualidade);
-    printf("OF: %d Q: %d\n", object.fruta, object.qualidade);
+    // printf("PF: %d Q: %d\n", (*prod).fruta, (*prod).qualidade);
+    // printf("OF: %d Q: %d\n", object.fruta, object.qualidade);
 
     fwrite(&object, sizeof(struct produto), 1, file);
 
   } else if (strcmp(operacao, "r") == 0) {
-    printf("reading\n");
 
-    // Pega o produto a ser classificado
+    // Get first product on the queue
     fread(prod, sizeof(struct produto), 1, file);
-    printf("prod: %d quali:%d\n", prod->fruta, prod->qualidade);
+    // printf("READ PROD: %d quali:%d\n", prod->fruta, prod->qualidade);
 
-    // Remove o produto da fila
-    struct produto object2[256];
-    int i = 0;
-    while (!feof(file)) {
-      fread(&object2[i], sizeof(struct produto), 1, file);
-      printf("obj2: %d quali:%d %d\n", object2[i].fruta, object2[i].qualidade, i);
-      i++;
-      int c = fgetc(file);
-      if (c == EOF) {
-        printf("Hit EOF\n");
-        ungetc(c, file);
-      } else
-        ungetc(c, file);
-    }
-
-    freopen("fila", "w", file);
-    for (int j = 0; j < i; j++) {
-      fwrite(&object2[j], sizeof(struct produto), 1, file);
-    }
-
-    fclose(file);
-    printf("closed\n");
+    // Remove product from queue
+    remove_first_from_queue(file);
   }
+  fclose(file);
 }
 
 void classifica_esteira() {
@@ -97,8 +95,9 @@ void adiciona_na_esteira() {
   // exit(0);
   struct produto prod;
   enum frutas size_of_enum = sizeOf;
-  srand(getpid()); // Good enought?
+  srand(getpid());
 
+  // Randomly generate product data
   prod.fruta = (rand() % (int)size_of_enum);
   prod.qualidade = rand() % 100;
 
@@ -108,27 +107,9 @@ void adiciona_na_esteira() {
   esteira(mode, &prod, "fila");
 }
 
-void init_esteira() {
-  FILE *fptr;
-  fptr = fopen("esteira", "r");
-
-  if (fptr == NULL) {
-    fptr = fopen("esteira", "w");
-  }
-  fclose(fptr);
-
-  fptr = fopen("classificacao", "r");
-
-  if (fptr == NULL) {
-    fptr = fopen("classificacao", "w");
-  }
-  fclose(fptr);
-}
-
 int main() {
   pid_t c1_pid, c2_pid, c3_pid, c4_pid;
   int DEBUG = 0;
-  init_esteira();
 
   // Creates 5 children
   (c1_pid = fork()) && (c2_pid = fork()) && (c3_pid = fork()) && (c4_pid = fork());
