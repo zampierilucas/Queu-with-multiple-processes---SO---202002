@@ -3,12 +3,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
 #define QUEUE_MAX_SIZE 256
+#define LOCK_SH 1 /* shared lock */
+#define LOCK_EX 2 /* exclusive lock */
+#define LOCK_NB 4 /* don't block when locking */
+#define LOCK_UN 8 /* unlock */
 
 enum frutas {
   banana,
@@ -24,58 +29,72 @@ struct product {
 } product;
 
 FILE *queue_lock(char *operacao, char *file_name) {
-
+  int lock;
   FILE *file = fopen(file_name, operacao);
+  lock = flock(fileno(file), LOCK_EX);
 
   while (file == NULL) {
     printf("File in use, waiting\n");
+
     sleep(1);
     file = fopen(file_name, operacao);
+    lock = flock(fileno(file), LOCK_EX);
   }
 
   return file;
 }
+
+#define ADD 1
+
 void remove_first_from_queue(FILE *file) {
-  int i = 0;
+  int i = 0, n = 0;
   struct product fromQueue[QUEUE_MAX_SIZE];
 
+  // Get data from file
   while (!feof(file)) {
-    fread(&fromQueue[i], sizeof(struct product), 1, file);
-    // printf("obj2: %d quali:%d %d\n", object2[i].fruta, object2[i].qualidade, i);
-    i++;
+    n = fread(&fromQueue[i], sizeof(struct product), 1, file);
 
-    int c = fgetc(file);
-    if (c == EOF) {
-      printf("Hit EOF\n");
-      ungetc(c, file);
-    } else
-      ungetc(c, file);
+    // Nothing to read
+    if (n == 0)
+      break;
+
+    i++;
   }
 
+  // Clear file queue
   freopen("fila", "w", file);
+
+  // Write data to file
   for (int j = 0; j < i; j++) {
     fwrite(&fromQueue[j], sizeof(struct product), 1, file);
   }
 }
+
 void queue(char *oper, struct product *prod, char *fila) {
   FILE *file = queue_lock(oper, fila);
 
   if (strcmp(oper, "a") == 0) {
+    // Aux structure
     struct product toQueue;
 
+    // Add ramdomly generated data to object
     toQueue.fruit = (*prod).fruit;
     toQueue.quality = (*prod).quality;
 
-    // printf("PF: %d Q: %d\n", (*prod).fruta, (*prod).qualidade);
-    // printf("OF: %d Q: %d\n", object.fruta, object.qualidade);
-
+    // Write to end queue
     fwrite(&toQueue, sizeof(struct product), 1, file);
 
   } else if (strcmp(oper, "r") == 0) {
+    int test = 0;
 
-    // Get first product on the queue
-    fread(prod, sizeof(struct product), 1, file);
-    // printf("READ PROD: %d quali:%d\n", prod->fruta, prod->qualidade);
+    // Read data to be processed
+    test = fread(prod, sizeof(struct product), 1, file);
+
+    // If there is no data to read
+    if (test == 0) {
+      printf("Nothing to sort on queue\n");
+      exit(1);
+    }
 
     // Remove product from queue
     remove_first_from_queue(file);
@@ -84,7 +103,7 @@ void queue(char *oper, struct product *prod, char *fila) {
 }
 
 void classifica_esteira() {
-  // exit(0);
+  // ADD ? false : exit(0);
   char *mode = "r";
   struct product prod;
 
@@ -94,7 +113,7 @@ void classifica_esteira() {
 }
 
 void adiciona_na_esteira() {
-  // exit(0);
+  // ADD ? exit(0) : false;
   struct product prod;
   enum frutas size_of_enum = sizeOf;
   srand(getpid());
@@ -128,7 +147,7 @@ int main() {
 
   } else if (c3_pid == 0) {
     DEBUG ? printf("3C-Feeder: PID = %d, PPID = %d \n", getpid(), getppid()) : false;
-    // adiciona_na_esteira();
+    adiciona_na_esteira();
     exit(0);
 
   } else if (c4_pid == 0) {
@@ -138,12 +157,11 @@ int main() {
 
   } else if (c5_pid == 0) {
     DEBUG ? printf("5C-Consumer: PID = %d, PPID = %d \n", getpid(), getppid()) : false;
-    // classifica_esteira();
+    classifica_esteira();
     exit(0);
 
   } else {
     DEBUG ? printf("Pai: PID = %d, PPID = %d \n", getpid(), getppid()) : false;
-    sleep(2);
 
     pid_t pid1 = wait(&c1_pid);
     pid_t pid2 = wait(&c2_pid);
@@ -151,10 +169,12 @@ int main() {
     pid_t pid4 = wait(&c4_pid);
     pid_t pid5 = wait(&c5_pid);
 
-    printf("\n\n\nPai: Filho (PID = %d) terminou, Status = %d \n", pid1, WEXITSTATUS(c1_pid));
-    printf("Pai: Filho (PID = %d) terminou, Status = %d \n", pid2, WEXITSTATUS(c2_pid));
-    printf("Pai: Filho (PID = %d) terminou, Status = %d \n", pid3, WEXITSTATUS(c3_pid));
-    printf("Pai: Filho (PID = %d) terminou, Status = %d \n", pid4, WEXITSTATUS(c4_pid));
-    printf("Pai: Filho (PID = %d) terminou, Status = %d \n", pid5, WEXITSTATUS(c5_pid));
+    if (DEBUG) {
+      printf("\n\nCPID = %d, Status = %d\n", pid1, WEXITSTATUS(c1_pid));
+      printf("CPID = %d, Status = %d\n", pid2, WEXITSTATUS(c2_pid));
+      printf("CPID = %d, Status = %d\n", pid3, WEXITSTATUS(c3_pid));
+      printf("CPID = %d, Status = %d\n", pid4, WEXITSTATUS(c4_pid));
+      printf("CPID = %d, Status = %d\n", pid5, WEXITSTATUS(c5_pid));
+    }
   }
 }
