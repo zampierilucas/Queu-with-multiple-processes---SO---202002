@@ -1,62 +1,30 @@
 // Lucas Marcon Zampieri -
 
-#include <assert.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <sys/file.h>
-#include <sys/mman.h>
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-
-enum frutas {
-  banana,
-  uva,
-  abacate,
-  abacaxi,
-  sizeOf
-} fruta;
 
 struct product {
   short int fruit;
   short int quality;
 } product;
 
-#define ITEMS_TO_ADD 9 // Must be a multiple o 3
-#define ORDERED 20
-int p_buff[2];
-int p_list[2];
-int timeout = 0;
+#define FEEDERS 3 // Number of feeder processes
+#define SORTERS 2 // Number of sorter processes
 
-struct product ord_list[ORDERED];
+#define N_FRUITS 6                     // Fruits supported
+#define N_ITEMS 9                      // Must be a multiple o 3
+#define N_PER_FEEDER N_ITEMS / FEEDERS // Items that a Feeder will add
 
-void adiciona_na_esteira() {
-  srand(getpid() * time(NULL));
-  struct product *prod = malloc(sizeof(product));
+int p_buff[2]; // Feeder to queue pipe
+int p_list[2]; // Sortet to parent pipe
 
-  for (int i = 0; i < ITEMS_TO_ADD / 3; i++) {
-    // Random delay to input and iten
-    sleep(rand() % (5 + 1 - 1) + 1);
-    enum frutas size_of_enum = sizeOf;
-
-    // Randomly generate product data
-    prod->fruit = (rand() % (int)size_of_enum);
-    prod->quality = rand() % 100;
-
-    close(p_buff[0]);
-    write(p_buff[1], prod, sizeof(product));
-
-    printf("%d ADD:  Fruta: %d Qualidade: %d\n", getpid(), prod->fruit, prod->quality);
-  }
-  exit(0);
-}
-
-void bsortDesc(struct product *list_to_sort, int arr_size) {
+// Sortim algoritm
+void bsort(struct product *list_to_sort, int arr_size) {
   struct product temp;
 
   // Sort value in new list
@@ -71,36 +39,59 @@ void bsortDesc(struct product *list_to_sort, int arr_size) {
   }
 }
 
-void classifica_esteira() {
-  while (true) {
-    struct product *prod = malloc(sizeof(product));
+// Feeder processes main function
+void add_to_queue() {
+  srand(getpid() * time(NULL));
+  struct product *prod = malloc(sizeof(product));
 
-    close(p_buff[1]);
-    ssize_t read_size = read(p_buff[0], prod, sizeof(product));
+  for (int i = 0; i < N_PER_FEEDER; i++) {
+
+    // Random delay to input and iten
+    sleep(rand() % (5 + 1 - 1) + 1);
+
+    // Randomly generate product data
+    prod->fruit = (rand() % N_FRUITS);
+    prod->quality = rand() % 100;
+
+    write(p_buff[1], prod, sizeof(product));
+    printf("%d ADD:  Fruta: %d Qualidade: %d\n", getpid(), prod->fruit, prod->quality);
+  }
+  exit(0);
+}
+
+// Sorter processes main function
+void sort_queue() {
+  int timeout = 0;
+  ssize_t read_size;
+
+  struct product *aux = malloc(sizeof(product));
+  struct product ord_list[N_ITEMS];
+
+  while (timeout < N_ITEMS) {
+    // Get data from pipe(queue)
+    read_size = read(p_buff[0], aux, sizeof(product));
 
     if (read_size > 0) {
-      printf("%d SORT: Fruta: %d Qualidade: %d\n", getpid(), prod->fruit, prod->quality);
-      ord_list[ITEMS_TO_ADD - 1] = *prod;
-      bsortDesc(ord_list, ITEMS_TO_ADD);
+      printf("%d SORT: Fruta: %d Qualidade: %d\n", getpid(), aux->fruit, aux->quality);
+
+      ord_list[N_ITEMS - 1] = *aux;
+      bsort(ord_list, N_ITEMS);
     } else {
       // If pipe is empty wait
       sleep(2);
       timeout++;
-
-      if (timeout > 6) {
-        printf("\n");
-        printf("%d - Pipe is empty exiting", getpid());
-
-        // Send ordenated list of current classificator to feeder.
-        write(p_list[1], &ord_list, sizeof(ord_list));
-
-        // for (int i = 0; i < ORDERED - 10; i++) {
-        //   printf("%d LIST: Fruta: %d Qualidade: %d\n", getpid(), ord_list[i].fruit, ord_list[i].quality);
-        // }
-        exit(0);
-      }
     }
   }
+
+  // printf("\n");
+  // for (int i = 0; i < N_ITEMS; i++)
+  //   printf("%d LIST: Fruta: %d Qualidade: %d\n", getpid(), ord_list[i].fruit, ord_list[i].quality);
+
+  printf("\n%d - Pipe is empty exiting ", getpid());
+
+  // Send ordenated list of current classificator to feeder.
+  write(p_list[1], &ord_list, sizeof(ord_list));
+  exit(0);
 }
 
 int main() {
@@ -108,7 +99,6 @@ int main() {
 
   // Spawn pipes
   if (pipe(p_buff) == -1 || pipe(p_list) == -1) {
-    perror("pipe");
     exit(EXIT_FAILURE);
   }
 
@@ -121,23 +111,23 @@ int main() {
 
   // CHILDREN - FEEDER 1
   if (c1_pid == 0)
-    adiciona_na_esteira();
+    add_to_queue();
 
   // CHILDREN - FEEDER 2
   else if (c2_pid == 0)
-    adiciona_na_esteira();
+    add_to_queue();
 
   // CHILDREN - FEEDER 3
   else if (c3_pid == 0)
-    adiciona_na_esteira();
+    add_to_queue();
 
-  // CHILDREN - CLASSIFICATOR 1
+  // CHILDREN - SORTER 1
   else if (c4_pid == 0)
-    classifica_esteira();
+    sort_queue();
 
-  // CHILDREN - CLASSIFICATOR 2
+  // CHILDREN - SORTER 2
   else if (c5_pid == 0)
-    classifica_esteira();
+    sort_queue();
 
   // PARENT
   else {
@@ -146,17 +136,18 @@ int main() {
     while (wait(&c1_pid) > 0 || wait(&c2_pid) > 0 || wait(&c3_pid) > 0 || wait(&c4_pid) > 0 || wait(&c5_pid) > 0)
       continue;
 
-    // Create a list to receiva the sorted lists of the classificators
-    struct product ordered_list[ORDERED * 2];
+    // Create a list to receive the sorted lists of the classificators
+    struct product ordered_list[N_ITEMS * 2];
 
-    read(p_list[0], &ordered_list, sizeof(ord_list) * 2);
+    // Get lists from Sorters
+    read(p_list[0], &ordered_list, (sizeof(product) * N_ITEMS) * 2);
 
     // Merge classificators lists
-    bsortDesc(ordered_list, ORDERED * 2);
+    bsort(ordered_list, N_ITEMS * 2);
 
     // Print final classificated list
     printf("\n");
-    for (int i = 0; i < ITEMS_TO_ADD; i++) {
+    for (int i = 0; i < N_ITEMS; i++) {
       printf("LIST: Fruta: %d Qualidade: %d\n", ordered_list[i].fruit, ordered_list[i].quality);
     }
     exit(0);
