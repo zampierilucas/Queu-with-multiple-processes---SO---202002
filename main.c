@@ -1,19 +1,18 @@
+// Lucas Marcon Zampieri -
+
 #include <assert.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
+#include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
-
-#define QUEUE_MAX_SIZE 256
-#define LOCK_SH 1 /* shared lock */
-#define LOCK_EX 2 /* exclusive lock */
-#define LOCK_NB 4 /* don't block when locking */
-#define LOCK_UN 8 /* unlock */
 
 enum frutas {
   banana,
@@ -28,153 +27,138 @@ struct product {
   short int quality;
 } product;
 
-FILE *queue_lock(char *operacao, char *file_name) {
-  int lock;
-  FILE *file = fopen(file_name, operacao);
-  lock = flock(fileno(file), LOCK_EX);
+#define ITEMS_TO_ADD 9 // Must be a multiple o 3
+#define ORDERED 20
+int p_buff[2];
+int p_list[2];
+int timeout = 0;
 
-  while (file == NULL) {
-    printf("File in use, waiting\n");
+struct product ord_list[ORDERED];
 
-    sleep(1);
-    file = fopen(file_name, operacao);
-    lock = flock(fileno(file), LOCK_EX);
+void adiciona_na_esteira() {
+  srand(getpid() * time(NULL));
+  struct product *prod = malloc(sizeof(product));
+
+  for (int i = 0; i < ITEMS_TO_ADD / 3; i++) {
+    // Random delay to input and iten
+    sleep(rand() % (5 + 1 - 1) + 1);
+    enum frutas size_of_enum = sizeOf;
+
+    // Randomly generate product data
+    prod->fruit = (rand() % (int)size_of_enum);
+    prod->quality = rand() % 100;
+
+    close(p_buff[0]);
+    write(p_buff[1], prod, sizeof(product));
+
+    printf("%d ADD:  Fruta: %d Qualidade: %d\n", getpid(), prod->fruit, prod->quality);
   }
-
-  return file;
+  exit(0);
 }
 
-#define ADD 1
+void bsortDesc(struct product *list_to_sort, int arr_size) {
+  struct product temp;
 
-void remove_first_from_queue(FILE *file) {
-  int i = 0, n = 0;
-  struct product fromQueue[QUEUE_MAX_SIZE];
-
-  // Get data from file
-  while (!feof(file)) {
-    n = fread(&fromQueue[i], sizeof(struct product), 1, file);
-
-    // Nothing to read
-    if (n == 0)
-      break;
-
-    i++;
-  }
-
-  // Clear file queue
-  freopen("fila", "w", file);
-
-  // Write data to file
-  for (int j = 0; j < i; j++) {
-    fwrite(&fromQueue[j], sizeof(struct product), 1, file);
-  }
-}
-
-void queue(char *oper, struct product *prod, char *fila) {
-  FILE *file = queue_lock(oper, fila);
-
-  if (strcmp(oper, "a") == 0) {
-    // Aux structure
-    struct product toQueue;
-
-    // Add ramdomly generated data to object
-    toQueue.fruit = (*prod).fruit;
-    toQueue.quality = (*prod).quality;
-
-    // Write to end queue
-    fwrite(&toQueue, sizeof(struct product), 1, file);
-
-  } else if (strcmp(oper, "r") == 0) {
-    int test = 0;
-
-    // Read data to be processed
-    test = fread(prod, sizeof(struct product), 1, file);
-
-    // If there is no data to read
-    if (test == 0) {
-      printf("Nothing to sort on queue\n");
-      exit(1);
+  // Sort value in new list
+  for (int i = 0; i < arr_size; i++) {
+    for (int j = 0; j < arr_size - 1; j++) {
+      if (list_to_sort[j].quality < list_to_sort[j + 1].quality) {
+        temp = list_to_sort[j];
+        list_to_sort[j] = list_to_sort[j + 1];
+        list_to_sort[j + 1] = temp;
+      }
     }
-
-    // Remove product from queue
-    remove_first_from_queue(file);
   }
-  fclose(file);
 }
 
 void classifica_esteira() {
-  // ADD ? false : exit(0);
-  char *mode = "r";
-  struct product prod;
+  while (true) {
+    struct product *prod = malloc(sizeof(product));
 
-  queue(mode, &prod, "fila");
+    close(p_buff[1]);
+    ssize_t read_size = read(p_buff[0], prod, sizeof(product));
 
-  printf("SORT: F: %d Q: %d\n", prod.fruit, prod.quality);
-}
+    if (read_size > 0) {
+      printf("%d SORT: Fruta: %d Qualidade: %d\n", getpid(), prod->fruit, prod->quality);
+      ord_list[ITEMS_TO_ADD - 1] = *prod;
+      bsortDesc(ord_list, ITEMS_TO_ADD);
+    } else {
+      // If pipe is empty wait
+      sleep(2);
+      timeout++;
 
-void adiciona_na_esteira() {
-  // ADD ? exit(0) : false;
-  struct product prod;
-  enum frutas size_of_enum = sizeOf;
-  srand(getpid());
+      if (timeout > 6) {
+        printf("\n");
+        printf("%d - Pipe is empty exiting", getpid());
 
-  // Randomly generate product data
-  prod.fruit = (rand() % (int)size_of_enum);
-  prod.quality = rand() % 100;
+        // Send ordenated list of current classificator to feeder.
+        write(p_list[1], &ord_list, sizeof(ord_list));
 
-  printf("ADD: F: %d Q: %d\n", prod.fruit, prod.quality);
-
-  char *mode = "a";
-  queue(mode, &prod, "fila");
+        // for (int i = 0; i < ORDERED - 10; i++) {
+        //   printf("%d LIST: Fruta: %d Qualidade: %d\n", getpid(), ord_list[i].fruit, ord_list[i].quality);
+        // }
+        exit(0);
+      }
+    }
+  }
 }
 
 int main() {
   pid_t c1_pid, c2_pid, c3_pid, c4_pid, c5_pid;
-  int DEBUG = 0;
+
+  // Spawn pipes
+  if (pipe(p_buff) == -1 || pipe(p_list) == -1) {
+    perror("pipe");
+    exit(EXIT_FAILURE);
+  }
+
+  // Make pipe reads non-blocking
+  if (fcntl(p_buff[0], F_SETFL, O_NONBLOCK) < 0 || fcntl(p_list[0], F_SETFL, O_NONBLOCK) < 0)
+    exit(2);
 
   // Creates 5 children
   (c1_pid = fork()) && (c2_pid = fork()) && (c3_pid = fork()) && (c4_pid = fork()) && (c5_pid = fork());
 
-  if (c1_pid == 0) {
-    DEBUG ? printf("1C-Feeder: PID = %d, PPID = %d \n", getpid(), getppid()) : false;
-    // adiciona_na_esteira();
-    exit(0);
-
-  } else if (c2_pid == 0) {
-    DEBUG ? printf("2C-Feeder: PID = %d, PPID = %d \n", getpid(), getppid()) : false;
+  // CHILDREN - FEEDER 1
+  if (c1_pid == 0)
     adiciona_na_esteira();
-    exit(0);
 
-  } else if (c3_pid == 0) {
-    DEBUG ? printf("3C-Feeder: PID = %d, PPID = %d \n", getpid(), getppid()) : false;
+  // CHILDREN - FEEDER 2
+  else if (c2_pid == 0)
     adiciona_na_esteira();
-    exit(0);
 
-  } else if (c4_pid == 0) {
-    DEBUG ? printf("4C-Consumer: PID = %d, PPID = %d \n", getpid(), getppid()) : false;
+  // CHILDREN - FEEDER 3
+  else if (c3_pid == 0)
+    adiciona_na_esteira();
+
+  // CHILDREN - CLASSIFICATOR 1
+  else if (c4_pid == 0)
     classifica_esteira();
-    exit(0);
 
-  } else if (c5_pid == 0) {
-    DEBUG ? printf("5C-Consumer: PID = %d, PPID = %d \n", getpid(), getppid()) : false;
+  // CHILDREN - CLASSIFICATOR 2
+  else if (c5_pid == 0)
     classifica_esteira();
-    exit(0);
 
-  } else {
-    DEBUG ? printf("Pai: PID = %d, PPID = %d \n", getpid(), getppid()) : false;
+  // PARENT
+  else {
 
-    pid_t pid1 = wait(&c1_pid);
-    pid_t pid2 = wait(&c2_pid);
-    pid_t pid3 = wait(&c3_pid);
-    pid_t pid4 = wait(&c4_pid);
-    pid_t pid5 = wait(&c5_pid);
+    //Wait for all children to exit
+    while (wait(&c1_pid) > 0 || wait(&c2_pid) > 0 || wait(&c3_pid) > 0 || wait(&c4_pid) > 0 || wait(&c5_pid) > 0)
+      continue;
 
-    if (DEBUG) {
-      printf("\n\nCPID = %d, Status = %d\n", pid1, WEXITSTATUS(c1_pid));
-      printf("CPID = %d, Status = %d\n", pid2, WEXITSTATUS(c2_pid));
-      printf("CPID = %d, Status = %d\n", pid3, WEXITSTATUS(c3_pid));
-      printf("CPID = %d, Status = %d\n", pid4, WEXITSTATUS(c4_pid));
-      printf("CPID = %d, Status = %d\n", pid5, WEXITSTATUS(c5_pid));
+    // Create a list to receiva the sorted lists of the classificators
+    struct product ordered_list[ORDERED * 2];
+
+    read(p_list[0], &ordered_list, sizeof(ord_list) * 2);
+
+    // Merge classificators lists
+    bsortDesc(ordered_list, ORDERED * 2);
+
+    // Print final classificated list
+    printf("\n");
+    for (int i = 0; i < ITEMS_TO_ADD; i++) {
+      printf("LIST: Fruta: %d Qualidade: %d\n", ordered_list[i].fruit, ordered_list[i].quality);
     }
+    exit(0);
   }
 }
